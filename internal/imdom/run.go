@@ -2,65 +2,37 @@ package imdom
 
 import (
 	"fmt"
-	"time"
+	"log"
+	"net/url"
 
 	"github.com/inkyblackness/imgui-go/v2"
-)
-
-// Platform covers mouse/keyboard/gamepad inputs, cursor shape, timing, windowing.
-type Platform interface {
-	// ShouldStop is regularly called as the abort condition for the program loop.
-	ShouldStop() bool
-	// ProcessEvents is called once per render loop to dispatch any pending events.
-	ProcessEvents()
-	// DisplaySize returns the dimension of the display.
-	DisplaySize() [2]float32
-	// FramebufferSize returns the dimension of the framebuffer.
-	FramebufferSize() [2]float32
-	// NewFrame marks the begin of a render pass. It must update the imgui IO state according to user input.
-	NewFrame()
-	// PostRender marks the completion of one render pass. Typically this causes the display buffer to be swapped.
-	PostRender()
-	// ClipboardText returns the current text of the clipboard, if available.
-	ClipboardText() (string, error)
-	// SetClipboardText sets the text as the current text of the clipboard.
-	SetClipboardText(text string)
-}
-
-type clipboard struct {
-	platform Platform
-}
-
-// Text retrieves the current text of the clipboard, if available.
-func (board clipboard) Text() (string, error) {
-	return board.platform.ClipboardText()
-}
-
-// SetText sets the text as the current text of the clipboard.
-func (board clipboard) SetText(text string) {
-	board.platform.SetClipboardText(text)
-}
-
-// Renderer covers rending imgui draw data.
-type Renderer interface {
-	// PreRender causes the display buffer to prepare for new output.
-	PreRender(clearColor [3]float32)
-	// Render draws the provided imgui draw data.
-	Render(displaySize [2]float32, framebufferSize [2]float32, drawData imgui.DrawData)
-}
-
-const (
-	millisPerSecond = 1000
-	sleepDuration   = time.Millisecond * 25
 )
 
 // Run implements the main program loop of the application. It returns when the platform signals to stop.
 func Run(p Platform, r Renderer) {
 	imgui.CurrentIO().SetClipboard(clipboard{platform: p})
 
+	// Initialize local state
 	showDemoWindow := false
 	clearColor := [3]float32{0.0, 0.0, 0.0}
+	connectionStatus := "Online"
 
+	// Initialize TickerPlant
+	url := url.URL{Scheme: "ws", Host: "localhost:8080", Path: "/ws"}
+	tickerPlant, err := NewTickerPlant(url)
+	if err != nil {
+		log.Fatalln(err)
+		return
+	}
+	go func() {
+		tickerPlant.Run()
+		defer func() {
+			tickerPlant.Close()
+			connectionStatus = "Offline"
+		}()
+	}()
+
+	// Run the window
 	for !p.ShouldStop() {
 		p.ProcessEvents()
 
@@ -76,8 +48,16 @@ func Run(p Platform, r Renderer) {
 
 			imgui.Checkbox("Demo Window", &showDemoWindow) // Edit bools storing our window open/close state
 
+			if imgui.Button("Subscribe trades") {
+				tickerPlant.SubscribeOrderBook("ESU0", "CME")
+			}
+
 			imgui.Text(fmt.Sprintf("Application average %.3f ms/frame (%.1f FPS)",
 				millisPerSecond/imgui.CurrentIO().Framerate(), imgui.CurrentIO().Framerate()))
+			imgui.Text(fmt.Sprintf("Connection Status:"))
+			imgui.SameLine()
+			imgui.Text(fmt.Sprint(connectionStatus))
+
 			imgui.End()
 		}
 
